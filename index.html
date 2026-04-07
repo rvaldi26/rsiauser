@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monitor Pasien - RSIA Stella Maris</title>
+    <!-- MQTT Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -14,18 +16,22 @@
             50% { opacity: 0.5; }
             100% { opacity: 1; }
         }
+        .animate-in { animation: fadeIn 0.5s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900">
 
     <!-- Header -->
-    <nav class="bg-white border-b p-4 sticky top-0 z-10 shadow-sm">
+    <nav class="bg-white border-b p-4 sticky top-0 z-50 shadow-sm">
         <div class="container mx-auto flex justify-between items-center">
             <div class="flex items-center gap-2">
-                <span class="text-2xl">SM</span>
+                <span class="text-2xl">🏥</span>
                 <h1 class="text-xl font-bold text-slate-800">Stella Maris <span class="text-blue-600 text-sm">Patient Portal</span></h1>
             </div>
-            <div id="live-clock" class="text-sm font-mono text-slate-500">00:00:00</div>
+            <div id="status-mqtt" class="text-[10px] font-mono bg-slate-100 px-3 py-1 rounded-full flex items-center gap-2">
+                <span class="w-2 h-2 bg-red-500 rounded-full"></span> Offline
+            </div>
         </div>
     </nav>
 
@@ -33,75 +39,91 @@
         
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
             
-            <!-- LEFT: LIVE QUEUE MONITOR -->
+            <!-- LEFT: LIVE QUEUE MONITOR (MQTT Driven) -->
             <div class="lg:col-span-1">
                 <h2 class="text-lg font-bold mb-4 flex items-center gap-2 text-slate-700">
                     <span class="w-3 h-3 bg-green-500 rounded-full status-pulse"></span>
-                    Antrian Sedang Diproses
+                    Antrian Saat Ini
                 </h2>
                 <div id="antrian_live" class="space-y-3">
-                    <!-- Dynamic Content -->
+                    <p class="text-slate-400 text-sm italic">Menghubungkan ke server...</p>
                 </div>
             </div>
 
             <!-- RIGHT: PERSONAL TRACKER -->
             <div class="lg:col-span-2">
-                <div class="bg-blue-600 rounded-2xl p-6 text-white shadow-xl mb-8">
-                    <h2 class="text-xl font-bold mb-2 text-center text-white">Cek Status & Detail Anda</h2>
-                    <p class="text-blue-100 text-sm text-center mb-6">Masukkan ID Pasien Anda untuk melihat diagnosa, resep, dan billing.</p>
+                <div class="bg-indigo-600 rounded-3xl p-8 text-white shadow-2xl mb-8 relative overflow-hidden">
+                    <!-- Decor -->
+                    <div class="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full"></div>
                     
-                    <div class="flex gap-2">
-                        <input type="text" id="input_cek_id" placeholder="Contoh: P001" class="flex-1 p-4 rounded-xl text-slate-800 font-bold focus:outline-none shadow-inner uppercase">
-                        <button onclick="cekStatusPasien()" class="bg-yellow-400 hover:bg-yellow-300 text-slate-900 px-8 rounded-xl font-bold transition-all">Cek</button>
+                    <h2 class="text-2xl font-bold mb-2">Cek Status Penanganan</h2>
+                    <p class="text-indigo-100 text-sm mb-8">Pantau hasil diagnosa, resep, dan rincian biaya Anda secara real-time.</p>
+                    
+                    <div class="flex flex-col md:flex-row gap-3">
+                        <input type="text" id="input_cek_id" placeholder="MASUKKAN ID PASIEN (P001)" class="flex-1 p-4 rounded-2xl text-slate-900 font-bold focus:outline-none shadow-inner uppercase tracking-widest text-lg">
+                        <button onclick="cekStatusPasien()" class="bg-yellow-400 hover:bg-yellow-300 text-slate-900 px-10 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">LIHAT DETAIL</button>
                     </div>
                 </div>
 
                 <!-- RESULT SECTION -->
-                <div id="hasil_cek" class="hidden animate-in fade-in duration-500">
-                    <div class="bg-white rounded-2xl shadow-sm border p-6">
-                        <div class="flex justify-between items-start border-b pb-4 mb-4">
+                <div id="hasil_cek" class="hidden animate-in">
+                    <div class="bg-white rounded-3xl shadow-sm border p-6 md:p-10">
+                        <div class="flex flex-col md:flex-row justify-between items-start border-b border-slate-100 pb-6 mb-8 gap-4">
                             <div>
-                                <p class="text-xs text-slate-400 uppercase font-bold tracking-wider">Nama Pasien</p>
-                                <h3 id="res_nama" class="text-2xl font-bold text-slate-800">-</h3>
+                                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest mb-1">Nama Pasien</p>
+                                <h3 id="res_nama" class="text-3xl font-black text-slate-800 tracking-tight">-</h3>
+                                <p id="res_id_display" class="text-blue-500 font-mono text-sm"></p>
                             </div>
-                            <div class="text-right">
-                                <p class="text-xs text-slate-400 uppercase font-bold tracking-wider">Status Saat Ini</p>
-                                <span id="res_status" class="inline-block px-3 py-1 bg-blue-100 text-blue-600 rounded-full text-xs font-bold mt-1 uppercase">-</span>
+                            <div class="bg-blue-50 px-4 py-2 rounded-2xl border border-blue-100">
+                                <p class="text-[10px] text-blue-400 uppercase font-bold text-center">Status Sekarang</p>
+                                <span id="res_status" class="block text-blue-700 font-bold text-sm uppercase text-center mt-1">-</span>
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <!-- Medis -->
-                            <div class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <!-- Medis Section -->
+                            <div class="space-y-6">
                                 <div>
-                                    <label class="text-xs text-slate-400 font-bold uppercase">Diagnosa Dokter</label>
-                                    <p id="res_diagnosa" class="text-slate-700 font-medium p-3 bg-slate-50 rounded-lg mt-1 border-l-4 border-red-400 italic">Menunggu diagnosa...</p>
+                                    <label class="text-[10px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-2">
+                                        🩺 Diagnosa Medis
+                                    </label>
+                                    <div id="res_diagnosa" class="text-slate-700 font-medium p-4 bg-slate-50 rounded-2xl mt-2 border-l-4 border-red-500 italic min-h-[60px]">
+                                        Menunggu pemeriksaan...
+                                    </div>
                                 </div>
                                 <div>
-                                    <label class="text-xs text-slate-400 font-bold uppercase">Resep Obat</label>
-                                    <div id="res_resep" class="text-slate-700 font-medium p-3 bg-yellow-50 rounded-lg mt-1 border-l-4 border-yellow-400">
-                                        Menunggu resep...
+                                    <label class="text-[10px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-2">
+                                        💊 Resep Obat
+                                    </label>
+                                    <div id="res_resep" class="text-slate-700 font-bold p-4 bg-yellow-50 rounded-2xl mt-2 border-l-4 border-yellow-400 min-h-[60px]">
+                                        Belum tersedia.
                                     </div>
                                 </div>
                             </div>
 
                             <!-- Billing Card -->
-                            <div class="bg-slate-900 rounded-xl p-6 text-white self-start">
-                                <h4 class="text-sm font-bold text-slate-400 uppercase mb-4">Rincian Billing Sementara</h4>
-                                <div class="flex justify-between mb-2">
-                                    <span class="text-slate-400 text-sm">Konsultasi & Obat</span>
-                                    <span id="res_biaya" class="font-mono text-xl font-bold text-yellow-400">Rp 0</span>
+                            <div class="bg-slate-900 rounded-3xl p-8 text-white shadow-xl flex flex-col justify-between">
+                                <div>
+                                    <h4 class="text-xs font-bold text-slate-500 uppercase tracking-widest mb-6">Informasi Billing</h4>
+                                    <div class="flex justify-between items-end">
+                                        <span class="text-slate-400 text-sm mb-1">Total Biaya:</span>
+                                        <span id="res_biaya" class="font-mono text-3xl font-black text-yellow-400 tracking-tighter">Rp 0</span>
+                                    </div>
                                 </div>
-                                <p class="text-[10px] text-slate-500 mt-4 leading-relaxed italic">*Harga dapat berubah setelah validasi farmasi & kasir.</p>
+                                <div class="mt-8 p-3 bg-white/5 rounded-xl border border-white/10">
+                                    <p class="text-[10px] text-slate-500 leading-relaxed italic">
+                                        *Data billing bersifat sementara hingga divalidasi oleh bagian Farmasi & Kasir.
+                                    </p>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <!-- NOT FOUND -->
-                <div id="not_found" class="hidden text-center py-20">
-                    <span class="text-5xl opacity-20">🔍</span>
-                    <p class="text-slate-400 mt-4 italic font-medium">ID Pasien tidak ditemukan atau data sudah masuk ke histori.</p>
+                <div id="not_found" class="hidden text-center py-20 bg-white rounded-3xl border border-dashed border-slate-200">
+                    <span class="text-6xl grayscale opacity-30">🔍</span>
+                    <p class="text-slate-400 mt-6 font-medium italic">ID Pasien tidak ditemukan dalam sistem antrian aktif.</p>
                 </div>
             </div>
 
@@ -109,52 +131,87 @@
     </main>
 
     <script>
-        function updateClock() {
-            const now = new Date();
-            document.getElementById('live-clock').innerText = now.toLocaleTimeString('id-ID');
-        }
-        setInterval(updateClock, 1000);
+        // --- MQTT CONFIGURATION (Must match Admin.html) ---
+        const MQTT_BROKER = 'wss://test.mosquitto.org:8081';
+        const TOPIC_SYNC = "stellamaris/data/update";
+        const client = mqtt.connect(MQTT_BROKER);
+
+        // State Variables (Local Memory)
+        let localAntrian = {};
+        let localHistori = [];
+
+        client.on('connect', () => {
+            console.log("Connected to Stella Maris MQTT Broker");
+            client.subscribe(TOPIC_SYNC);
+            
+            const statusBox = document.getElementById('status-mqtt');
+            statusBox.innerHTML = '<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Live Sync Active';
+            statusBox.classList.replace('bg-slate-100', 'bg-green-50');
+            statusBox.classList.add('text-green-600');
+        });
+
+        // --- RECEIVE DATA FROM ADMIN ---
+        client.on('message', (topic, message) => {
+            if (topic === TOPIC_SYNC) {
+                const incoming = JSON.parse(message.toString());
+                localAntrian = incoming.antrian;
+                localHistori = incoming.histori;
+
+                console.log("Database Updated via MQTT");
+                renderLiveQueue();
+                
+                // If user is currently looking at a patient ID, refresh the view
+                const currentSearch = document.getElementById('input_cek_id').value.trim().toUpperCase();
+                if(currentSearch) cekStatusPasien(); 
+            }
+        });
 
         function renderLiveQueue() {
-            const database = JSON.parse(localStorage.getItem('rs_antrian')) || {};
             const container = document.getElementById('antrian_live');
             container.innerHTML = '';
 
-            const patients = Object.values(database);
+            const patients = Object.values(localAntrian);
+            
             if (patients.length === 0) {
-                container.innerHTML = '<p class="text-slate-400 text-sm italic">Tidak ada antrian aktif.</p>';
+                container.innerHTML = `
+                    <div class="bg-white p-6 rounded-2xl text-center border-2 border-dashed border-slate-100">
+                        <p class="text-slate-300 text-xs italic font-medium">Tidak ada antrian saat ini.</p>
+                    </div>`;
                 return;
             }
 
             patients.forEach(p => {
-                let statusLabel = "";
-                let borderColor = "";
+                let statusTxt = "";
+                let color = "bg-slate-400";
                 
-                switch(p.status) {
-                    case 'daftar': statusLabel = "Menunggu Perawat"; borderColor = "border-blue-400"; break;
-                    case 'perawat_done': statusLabel = "Antrian Dokter"; borderColor = "border-green-400"; break;
-                    case 'dokter_done': statusLabel = "Farmasi & Billing"; borderColor = "border-yellow-400"; break;
-                }
+                if(p.status === 'daftar') { statusTxt = "Menunggu Perawat"; color = "bg-blue-500"; }
+                else if(p.status === 'perawat_done') { statusTxt = "Antrian Dokter"; color = "bg-green-500"; }
+                else if(p.status === 'dokter_done') { statusTxt = "Menunggu Obat/Billing"; color = "bg-yellow-500"; }
 
                 container.innerHTML += `
-                    <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 ${borderColor} flex justify-between items-center">
-                        <div>
-                            <p class="font-bold text-slate-800">${p.nama}</p>
-                            <p class="text-[10px] text-slate-400">${p.id} • ${p.timestamp}</p>
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center animate-in">
+                        <div class="flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-400 text-xs">
+                                ${p.id.slice(-2)}
+                            </div>
+                            <div>
+                                <p class="font-bold text-slate-800 leading-none mb-1">${p.nama}</p>
+                                <p class="text-[10px] text-slate-400 font-mono tracking-tighter">${p.id} • ${p.timestamp}</p>
+                            </div>
                         </div>
-                        <span class="text-[10px] font-bold text-slate-500 uppercase">${statusLabel}</span>
-                    </div>
-                `;
+                        <div class="text-right">
+                            <span class="text-[8px] font-black ${color} text-white px-2 py-1 rounded-lg uppercase tracking-widest">${statusTxt}</span>
+                        </div>
+                    </div>`;
             });
         }
 
         function cekStatusPasien() {
             const idInput = document.getElementById('input_cek_id').value.trim().toUpperCase();
-            const database = JSON.parse(localStorage.getItem('rs_antrian')) || {};
-            const histori = JSON.parse(localStorage.getItem('rs_histori')) || [];
-            
-            // Cek di antrian aktif dulu, kalau tidak ada cek di histori
-            let data = database[idInput] || histori.find(h => h.id === idInput);
+            if(!idInput) return;
+
+            // Search in Active Queue or Recent History
+            let data = localAntrian[idInput] || localHistori.find(h => h.id === idInput);
 
             const resultDiv = document.getElementById('hasil_cek');
             const notFoundDiv = document.getElementById('not_found');
@@ -164,22 +221,16 @@
                 notFoundDiv.classList.add('hidden');
 
                 document.getElementById('res_nama').innerText = data.nama;
+                document.getElementById('res_id_display').innerText = `Patient Reference: ${data.id}`;
                 document.getElementById('res_status').innerText = data.status.replace('_', ' ');
-                document.getElementById('res_diagnosa').innerText = data.diagnosa || "Sedang diperiksa dokter...";
-                document.getElementById('res_resep').innerText = data.resep || "Belum ada resep.";
-                
-                // Jika di histori, tampilkan biaya aslinya, jika masih antrian hitung estimasi
-                const biaya = data.biaya || 0;
-                document.getElementById('res_biaya').innerText = `Rp ${biaya.toLocaleString()}`;
+                document.getElementById('res_diagnosa').innerText = data.diagnosa || "Menunggu pemeriksaan dokter...";
+                document.getElementById('res_resep').innerText = data.resep || "Belum ada resep tercatat.";
+                document.getElementById('res_biaya').innerText = `Rp ${(data.biaya || 0).toLocaleString()}`;
             } else {
                 resultDiv.classList.add('hidden');
                 notFoundDiv.classList.remove('hidden');
             }
         }
-
-        // Auto Refresh Antrian tiap 5 detik
-        setInterval(renderLiveQueue, 5000);
-        renderLiveQueue();
     </script>
 </body>
 </html>
